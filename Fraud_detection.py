@@ -87,14 +87,20 @@ for name, model in models.items():
         "f1": [],
         "roc_auc": [],
     }
-    
-    for train_idx, val_idx in cv.split(X_train_bal, y_train_bal):
-        X_fold_train, X_fold_val = X_train_bal[train_idx], X_train_bal[val_idx]
-        y_fold_train, y_fold_val = y_train_bal.iloc[train_idx], y_train_bal.iloc[val_idx]
-        
-        model.fit(X_fold_train, y_fold_train)
-        y_pred = model.predict(X_fold_val)
-        y_prob = model.predict_proba(X_fold_val)[:, 1]
+
+    # REPAIR: this loop previously built the imblearn Pipeline above and then
+    # never used it -- it fit the raw model on X_train_bal, data that had
+    # already been SMOTE-balanced and scaled outside the loop. The loop now
+    # runs the pipeline on the ORIGINAL (unbalanced, unscaled) training
+    # split, which is what the pipeline exists for: scaling and SMOTE are
+    # refit inside each fold, so nothing leaks across folds.
+    for train_idx, val_idx in cv.split(X_train, y_train):
+        X_fold_train, X_fold_val = X_train.iloc[train_idx], X_train.iloc[val_idx]
+        y_fold_train, y_fold_val = y_train.iloc[train_idx], y_train.iloc[val_idx]
+
+        pipeline.fit(X_fold_train, y_fold_train)
+        y_pred = pipeline.predict(X_fold_val)
+        y_prob = pipeline.predict_proba(X_fold_val)[:, 1]
         
         scores["precision"].append(precision_score(y_fold_val, y_pred))
         scores["recall"].append(recall_score(y_fold_val, y_pred))
@@ -175,6 +181,13 @@ print("Average Backtesting ROC-AUC:", np.mean(backtest_scores))
 # -------------------------------------------------------------------------------------
 # 6. Save the Best Model
 # -------------------------------------------------------------------------------------
+# REPAIR: by this point best_rf was last fitted inside the backtest in
+# Section 5, on data scaled by scaler_time -- but the /predict endpoint in
+# Section 7 scales incoming features with `scaler`. Refit on X_train_bal
+# (the data `scaler` produced) so the saved model and the endpoint use the
+# same scaling.
+best_rf.fit(X_train_bal, y_train_bal)
+
 with open("best_fraud_model.pkl", "wb") as f:
     pickle.dump(best_rf, f)
 
